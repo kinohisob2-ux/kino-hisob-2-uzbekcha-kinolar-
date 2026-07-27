@@ -24,6 +24,7 @@ from database import (
     add_mandatory_subscription, remove_mandatory_subscription, list_mandatory_subscriptions,
     set_user_completed_sub
 )
+from telethon_client import init_telethon, check_user_in_chat_telethon
 
 load_dotenv()
 
@@ -69,9 +70,9 @@ async def send_ad(bot, chat_id):
         print(f"Reklama yuborishda xatolik: {e}")
 
 
-# ======================== Obuna tekshirish ========================
+# ======================== Obuna tekshirish (TELETHON) ========================
 async def check_subscription_status(bot, user_id, sub_data):
-    """Kanal/guruh/zayafka a'zoligini tekshiradi"""
+    """Telethon orqali tekshiradi - zayafka ham, privacy mode ham ishlaydi!"""
     try:
         chat_id = None
         
@@ -81,34 +82,21 @@ async def check_subscription_status(bot, user_id, sub_data):
             identifier = sub_data["identifier"]
             if identifier.startswith("@"):
                 chat_id = identifier
+            elif identifier.startswith("-100"):
+                chat_id = identifier
             elif "t.me/" in identifier:
-                parts = identifier.split("/")
-                if len(parts) >= 2:
-                    username = parts[-1]
-                    if not username.startswith("+") and "joinchat" not in username:
-                        chat_id = "@" + username
-                    else:
-                        if sub_data.get("chat_id"):
-                            chat_id = sub_data["chat_id"]
-                        else:
-                            return None
+                chat_id = identifier
             else:
                 chat_id = "@" + identifier.lstrip("@")
         
         if not chat_id:
             return None
         
-        member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-        return member.status in ["member", "administrator", "creator"]
+        result = await check_user_in_chat_telethon(user_id, chat_id)
+        print(f"Telethon tekshirish: {chat_id} -> {result}")
+        return result
         
     except Exception as e:
-        error_str = str(e).lower()
-        if "inaccessible" in error_str:
-            return None
-        if "forbidden" in error_str:
-            return None
-        if "not a member" in error_str or "user not found" in error_str:
-            return False
         print(f"check_subscription_status xatolik: {e}")
         return None
 
@@ -266,7 +254,6 @@ async def confirm_all_subs_callback(update: Update, context: CallbackContext):
         await query.edit_message_text(msg_text, disable_web_page_preview=True)
         return
 
-    # Barchasi OK
     for sub in subs:
         if not await is_user_completed_sub(user_id, sub["id"]):
             await mark_user_completed_sub(user_id, sub["id"])
@@ -325,7 +312,7 @@ async def admin(update: Update, context: CallbackContext):
         "/removead - reklamani o'chirish\n"
         "/adstats - reklama statistikasi\n\n"
         "<b>📛 Majburiy obuna:</b>\n"
-        "/add_mandatory &lt;tur&gt; &lt;havola&gt; &lt;limit&gt; [chat_id]\n"
+        "/add_mandatory &lt;tur&gt; &lt;havola&gt; &lt;limit&gt;\n"
         "Turlar: telegram, group, invite, bot, youtube, instagram, website\n\n"
         "/remove_mandatory &lt;id&gt;\n"
         "/list_mandatory",
@@ -541,222 +528,4 @@ async def setad_get_content(update: Update, context: CallbackContext):
         file_id = msg.audio.file_id
     elif msg.voice:
         content_type = "voice"
-        file_id = msg.voice.file_id
-    elif msg.animation:
-        content_type = "animation"
-        file_id = msg.animation.file_id
-    else:
-        await update.message.reply_text("❌ Qo'llab-quvvatlanmaydi.")
-        return WAITING_AD_CONTENT
-
-    await set_ad(content_type, file_id, text, caption)
-    await update.message.reply_text(f"✅ Reklama saqlandi!\nTuri: {content_type}")
-    return ConversationHandler.END
-
-
-async def removead(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    await remove_ad()
-    await update.message.reply_text("🗑️ Reklama o'chirildi.")
-
-
-async def adstats(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    ad = await get_ad()
-    if ad:
-        count = ad["send_count"]
-        await update.message.reply_text(f"📊 Reklama {count} marta yuborilgan.")
-    else:
-        await update.message.reply_text("📭 Reklama o'rnatilmagan.")
-
-
-# ======================== Majburiy obuna admin ========================
-async def add_mandatory(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    args = context.args
-    if len(args) < 3:
-        await update.message.reply_text(
-            "Ishlatish: /add_mandatory <type> <identifier> <limit> [chat_id]\n\n"
-            "Turlar: telegram, group, invite, bot, youtube, instagram, website\n\n"
-            "Masalan:\n"
-            "/add_mandatory telegram @kino_kanal 5000\n"
-            "/add_mandatory invite https://t.me/+abc 1000 -1001234567890"
-        )
-        return
-
-    sub_type = args[0]
-    identifier = args[1]
-    limit = int(args[2])
-    chat_id = int(args[3]) if len(args) >= 4 else None
-
-    valid_types = ["telegram", "group", "invite", "bot", "youtube", "instagram", "website"]
-    if sub_type not in valid_types:
-        await update.message.reply_text(f"❌ Tur noto'g'ri. Qabul qilinadi: {', '.join(valid_types)}")
-        return
-
-    await add_mandatory_subscription(sub_type, identifier, limit, chat_id)
-
-    msg = f"✅ Qo'shildi: {sub_type} | {identifier} | limit: {limit}"
-    if chat_id:
-        msg += f" | Chat ID: {chat_id}"
-    await update.message.reply_text(msg)
-
-
-async def remove_mandatory(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    if not context.args:
-        await update.message.reply_text("Ishlatish: /remove_mandatory <id>")
-        return
-    sub_id = int(context.args[0])
-    await remove_mandatory_subscription(sub_id)
-    await update.message.reply_text(f"✅ ID {sub_id} o'chirildi.")
-
-
-async def list_mandatory(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    rows = await list_mandatory_subscriptions()
-    if not rows:
-        await update.message.reply_text("Hech qanday majburiy obuna yo'q.")
-        return
-
-    text = "📋 Majburiy obunalar:\n\n"
-    for r in rows:
-        status = "✅ faol" if r["is_active"] else "❌ faol emas"
-        text += f"ID {r['id']}: {r['type']} | {r['identifier']}\n  Limit: {r['limit_count']} | Bajargan: {r['current_count']} | {status}"
-        if r["chat_id"]:
-            text += f" | Chat ID: {r['chat_id']}"
-        text += "\n\n"
-
-    if len(text) > 4000:
-        for i in range(0, len(text), 4000):
-            await update.message.reply_text(text[i:i+4000])
-    else:
-        await update.message.reply_text(text)
-
-
-# ======================== Kod yuborish ========================
-async def handle_code(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-
-    if await check_and_handle_mandatory_subs(update, context):
-        return
-
-    text = update.message.text.strip()
-    if not text.isdigit():
-        await update.message.reply_text("🤔 Iltimos, faqat raqamlardan iborat kod yuboring.")
-        return
-
-    video = await get_video(text)
-    if video:
-        file_id, description = video
-        caption = f"🎬 Kodi: {text}\n📖 {description}" if description else f"🎬 Kodi: {text}"
-        try:
-            await update.message.reply_video(video=file_id, caption=caption, supports_streaming=True, protect_content=True)
-        except Exception as e:
-            print(f"Video yuborish xatosi: {e}")
-            await update.message.reply_text("❌ Video yuborishda xatolik yuz berdi.")
-            return
-        links_msg = "📱 Instagram: https://instagram.com/Bear_uzb070\n📣 Kino kanal: @kino_boru"
-        await update.message.reply_text(links_msg)
-        await send_ad(context.bot, user_id)
-    else:
-        await update.message.reply_text(f"❌ {text} kodli video topilmadi.")
-
-
-# ======================== Webhook ========================
-async def webhook_handler(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, bot_application.bot)
-    await bot_application.process_update(update)
-    return JSONResponse({"ok": True})
-
-
-async def healthcheck(request: Request):
-    return JSONResponse({"status": "ok"})
-
-
-bot_application = None
-
-
-# ======================== Main ========================
-async def main():
-    global bot_application
-    await init_db()
-    bot_application = Application.builder().token(BOT_TOKEN).build()
-
-    private_filter = filters.ChatType.PRIVATE
-
-    bot_application.add_handler(CommandHandler("start", start, filters=private_filter))
-    bot_application.add_handler(CommandHandler("admin", admin, filters=private_filter))
-    bot_application.add_handler(CommandHandler("stats", stats, filters=private_filter))
-    bot_application.add_handler(CommandHandler("delvideo", delvideo, filters=private_filter))
-    bot_application.add_handler(CommandHandler("list", listvideos, filters=private_filter))
-    bot_application.add_handler(CommandHandler("refstats", refstats, filters=private_filter))
-    bot_application.add_handler(CommandHandler("removead", removead, filters=private_filter))
-    bot_application.add_handler(CommandHandler("adstats", adstats, filters=private_filter))
-    bot_application.add_handler(CommandHandler("cancel", cancel, filters=private_filter))
-    bot_application.add_handler(CommandHandler("add_mandatory", add_mandatory, filters=private_filter))
-    bot_application.add_handler(CommandHandler("remove_mandatory", remove_mandatory, filters=private_filter))
-    bot_application.add_handler(CommandHandler("list_mandatory", list_mandatory, filters=private_filter))
-    bot_application.add_handler(CallbackQueryHandler(confirm_all_subs_callback, pattern="^confirm_all_subs$"))
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("addvideo", addvideo_start, filters=private_filter)],
-        states={
-            WAITING_FOR_VIDEO: [MessageHandler(filters.VIDEO & private_filter, addvideo_video)],
-            WAITING_FOR_CUSTOM_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, addvideo_custom_code)],
-            WAITING_FOR_DESCRIPTION: [
-                CommandHandler("skip", addvideo_skip, filters=private_filter),
-                MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, addvideo_description)
-            ]
-        },
-        fallbacks=[CommandHandler("cancel", cancel, filters=private_filter)]
-    )
-    bot_application.add_handler(conv_handler)
-
-    broadcast_conv = ConversationHandler(
-        entry_points=[CommandHandler("broadcast", broadcast_start, filters=private_filter)],
-        states={WAITING_BROADCAST: [MessageHandler(filters.ALL & ~filters.COMMAND & private_filter, broadcast_send)]},
-        fallbacks=[CommandHandler("cancel", cancel, filters=private_filter)]
-    )
-    bot_application.add_handler(broadcast_conv)
-
-    ref_conv = ConversationHandler(
-        entry_points=[CommandHandler("createref", createref_start, filters=private_filter)],
-        states={WAITING_REF_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, createref_get_name)]},
-        fallbacks=[CommandHandler("cancel", cancel, filters=private_filter)]
-    )
-    bot_application.add_handler(ref_conv)
-
-    ad_conv = ConversationHandler(
-        entry_points=[CommandHandler("setad", setad_start, filters=private_filter)],
-        states={WAITING_AD_CONTENT: [MessageHandler(filters.ALL & ~filters.COMMAND & private_filter, setad_get_content)]},
-        fallbacks=[CommandHandler("cancel", cancel, filters=private_filter)]
-    )
-    bot_application.add_handler(ad_conv)
-
-    bot_application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, handle_code))
-
-    await bot_application.initialize()
-    await bot_application.bot.set_webhook(WEBHOOK_URL)
-
-    starlette_app = Starlette(debug=False, routes=[
-        Route(WEBHOOK_PATH, webhook_handler, methods=["POST"]),
-        Route("/healthcheck", healthcheck, methods=["GET"]),
-    ])
-
-    port = int(os.environ.get("PORT", 8080))
-    print(f"✅ Bot ishga tushdi, webhook: {WEBHOOK_URL}")
-    import uvicorn
-    config = uvicorn.Config(starlette_app, host="0.0.0.0", port=port, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        file
