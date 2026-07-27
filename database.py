@@ -66,15 +66,6 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
-        # chat_id ustunini qo'shish (agar eski jadval bo'lsa)
-        try:
-            await conn.execute('''
-                ALTER TABLE mandatory_subscriptions 
-                ADD COLUMN IF NOT EXISTS chat_id BIGINT
-            ''')
-        except:
-            pass
 
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS user_completed_subs (
@@ -247,7 +238,6 @@ async def is_user_completed_sub(user_id: int, sub_id: int) -> bool:
 
 
 async def mark_user_completed_sub(user_id: int, sub_id: int) -> bool:
-    """Birinchi marta bajarilganda current_count +1 qiladi"""
     async with pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchval(
@@ -281,7 +271,6 @@ async def mark_user_completed_sub(user_id: int, sub_id: int) -> bool:
 
 
 async def set_user_completed_sub(user_id: int, sub_id: int, completed: bool = True):
-    """Faqat yozuv qo'shadi/o'chiradi, count ga tegmaydi"""
     async with pool.acquire() as conn:
         if completed:
             await conn.execute(
