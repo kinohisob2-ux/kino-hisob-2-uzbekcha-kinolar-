@@ -8,7 +8,6 @@ async def init_db():
     pool = await asyncpg.create_pool(DATABASE_URL)
 
     async with pool.acquire() as conn:
-        # ----- Foydalanuvchilar -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -18,7 +17,6 @@ async def init_db():
             )
         ''')
 
-        # ----- Videolar -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS videos (
                 code TEXT PRIMARY KEY,
@@ -27,7 +25,6 @@ async def init_db():
             )
         ''')
 
-        # ----- Referallar -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS referrals (
                 code TEXT PRIMARY KEY,
@@ -36,7 +33,6 @@ async def init_db():
             )
         ''')
 
-        # ----- Reklama -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS ads (
                 id INTEGER PRIMARY KEY DEFAULT 1,
@@ -53,7 +49,6 @@ async def init_db():
             ON CONFLICT (id) DO NOTHING
         ''')
 
-        # ----- Majburiy obuna -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS mandatory_subscriptions (
                 id SERIAL PRIMARY KEY,
