@@ -1,12 +1,13 @@
 from telethon import TelegramClient
 from telethon.errors import UserNotParticipantError, ChatAdminRequiredError
-from telethon.tl.functions.messages import GetChatJoinRequestsRequest
-from telethon.tl.types import InputPeerChannel
+from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.types import ChannelParticipantsKicked, InputPeerChannel
 from config import API_ID, API_HASH
 
 client = None
 
 async def init_telethon(bot_token):
+    """Telethon clientni bot token bilan ishga tushirish"""
     global client
     client = TelegramClient('bot_session', API_ID, API_HASH)
     await client.start(bot_token=bot_token)
@@ -16,7 +17,7 @@ async def check_user_in_chat_telethon(user_id, chat_identifier):
     """
     Tekshirish tartibi:
     1. get_permissions - a'zo bo'lganlarni tekshiradi
-    2. GetChatJoinRequestsRequest - zayafka so'rovlarini tekshiradi
+    2. get_participants - barcha ishtirokchilarni tekshiradi (zayafka + a'zo)
     """
     global client
     if not client:
@@ -42,14 +43,15 @@ async def check_user_in_chat_telethon(user_id, chat_identifier):
                 entity = await client.get_entity(int(chat_id_str))
             else:
                 entity = await client.get_entity("@" + chat_id_str.lstrip("@"))
-            
-            print(f"Entity topildi: {entity.title if hasattr(entity, 'title') else entity.id}")
         except Exception as e:
             print(f"Entity olishda xatolik: {e}")
             return None
         
         if not entity:
+            print(f"Entity topilmadi: {chat_id_str}")
             return None
+        
+        print(f"Entity: {entity.title if hasattr(entity, 'title') else entity.id}")
         
         # 1-usul: get_permissions (a'zo bo'lganlar)
         try:
@@ -57,43 +59,28 @@ async def check_user_in_chat_telethon(user_id, chat_identifier):
             print(f"✅ A'zo: user_id={user_id_int}")
             return True
         except UserNotParticipantError:
-            print(f"A'zo emas, zayafka tekshiriladi...")
+            print(f"A'zo emas: {user_id_int}")
         except Exception as e:
             print(f"get_permissions xatolik: {e}")
         
-        # 2-usul: Join Requests (zayafka so'rovlari)
+        # 2-usul: get_participants (barcha: a'zo + admin + zayafka)
         try:
-            peer = InputPeerChannel(
-                channel_id=entity.id,
-                access_hash=entity.access_hash
-            )
+            print("get_participants orqali tekshirilmoqda...")
+            participants = await client.get_participants(entity, limit=200)
             
-            result = await client(GetChatJoinRequestsRequest(
-                peer=peer,
-                limit=100,
-                offset_date=None,
-                offset_user=None
-            ))
+            for p in participants:
+                if p.id == user_id_int:
+                    print(f"✅ Topildi (get_participants): user_id={user_id_int}")
+                    return True
             
-            if hasattr(result, 'participants'):
-                print(f"Jami {len(result.participants)} ta zayafka so'rovi bor")
-                for p in result.participants:
-                    print(f"  - So'rov: user_id={p.user_id}")
-                    if p.user_id == user_id_int:
-                        print(f"✅ Zayafka so'rovi topildi: user_id={user_id_int}")
-                        return True
-                
-                print(f"❌ Zayafka so'rovi topilmadi: user_id={user_id_int}")
-                return False
-            else:
-                print(f"Zayafka so'rovlari yo'q")
-                return False
-                
+            print(f"❌ Topilmadi: user_id={user_id_int}")
+            return False
+            
         except ChatAdminRequiredError:
             print("❌ Bot admin emas!")
             return None
         except Exception as e:
-            print(f"Join requests xatolik: {e}")
+            print(f"get_participants xatolik: {e}")
             return None
             
     except Exception as e:
@@ -101,6 +88,7 @@ async def check_user_in_chat_telethon(user_id, chat_identifier):
         return None
 
 async def close_telethon():
+    """Telethon clientni o'chirish"""
     global client
     if client:
         await client.disconnect()
