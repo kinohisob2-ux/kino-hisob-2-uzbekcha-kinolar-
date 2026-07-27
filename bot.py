@@ -75,30 +75,43 @@ async def check_telegram_membership(bot, user_id, sub_data):
     try:
         chat_id = None
         
-        # Avval chat_id bo'lsa (zayafka uchun)
+        # Avval chat_id bo'lsa (zayafka yoki yopiq guruh uchun)
         if sub_data.get("chat_id"):
             chat_id = sub_data["chat_id"]
         else:
             identifier = sub_data["identifier"]
             
+            # @username formatida
             if identifier.startswith("@"):
                 chat_id = identifier
+            
+            # https://t.me/ formatida
             elif "t.me/" in identifier:
                 if "t.me/+" in identifier or "joinchat" in identifier:
-                    # Zayafka - chat_id yo'q bo'lsa tekshirib bo'lmaydi
-                    return None
+                    # Zayafka link - chat_id yo'q bo'lsa, linkdan chat olishga harakat qilamiz
+                    try:
+                        chat = await bot.get_chat(identifier)
+                        chat_id = chat.id
+                    except Exception as e:
+                        print(f"Zayafka linkdan chat olishda xatolik: {e}")
+                        return None
                 else:
+                    # Oddiy link - usernameni olamiz
                     parts = identifier.split("/")
                     if len(parts) >= 2:
                         chat_id = "@" + parts[-1]
+            
+            # Faqat username berilgan
             else:
                 chat_id = "@" + identifier.lstrip("@")
         
         if not chat_id:
             return None
         
+        # A'zolikni tekshirish
         member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
+        
     except Exception as e:
         print(f"Membership check error: {e}")
         return False
@@ -111,45 +124,25 @@ async def show_mandatory_subs(update: Update, context: CallbackContext):
     if not subs:
         return True
 
+    # Faqat bajarilmaganlarini olamiz
     incomplete = []
     for sub in subs:
-        if not await is_user_completed_sub(user_id, sub["id"]):
+        is_completed = await is_user_completed_sub(user_id, sub["id"])
+        if not is_completed:
             incomplete.append(sub)
 
     if not incomplete:
         return True
 
-    type_icons = {
-        "telegram": "📢",
-        "group": "👥",
-        "invite": "🔗",
-        "bot": "🤖",
-        "youtube": "▶️",
-        "instagram": "📷",
-        "website": "🌐"
-    }
-
-    type_names = {
-        "telegram": "kanal",
-        "group": "guruh",
-        "invite": "guruh",
-        "bot": "bot",
-        "youtube": "YouTube",
-        "instagram": "Instagram",
-        "website": "vebsayt"
-    }
-
-    text = "🔔 <b>Botdan foydalanish uchun quyidagilarni bajaring:</b>\n\n"
+    text = "🔔 <b>Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:</b>\n\n"
     url_buttons = []
 
     for idx, sub in enumerate(incomplete, start=1):
         sub_type = sub["type"]
         identifier = sub["identifier"]
-        icon = type_icons.get(sub_type, "📌")
-        type_name = type_names.get(sub_type, "havola")
         
-        # Tugma matni - faqat raqam va tur
-        button_text = f"{icon} {idx}-{type_name}"
+        # HAMMASI BIR XIL - faqat raqam va "kanal"
+        button_text = f"📢 {idx}-kanal"
         
         # Havola tayyorlash
         if sub_type in ("telegram", "group"):
@@ -167,13 +160,7 @@ async def show_mandatory_subs(update: Update, context: CallbackContext):
             bot_username = identifier.replace("@", "").replace("https://t.me/", "").split("?")[0].split("/")[-1]
             url = f"https://t.me/{bot_username}?start=start"
             
-        elif sub_type == "youtube":
-            url = identifier
-            
-        elif sub_type == "instagram":
-            url = identifier
-            
-        elif sub_type == "website":
+        elif sub_type in ("youtube", "instagram", "website"):
             url = identifier
             
         else:
@@ -181,7 +168,7 @@ async def show_mandatory_subs(update: Update, context: CallbackContext):
 
         url_buttons.append([InlineKeyboardButton(button_text, url=url)])
 
-    confirm_button = [[InlineKeyboardButton("✅ Barchasini bajardim", callback_data="confirm_all_subs")]]
+    confirm_button = [[InlineKeyboardButton("✅ Obuna bo'ldim", callback_data="confirm_all_subs")]]
     reply_markup = InlineKeyboardMarkup(url_buttons + confirm_button)
 
     if "mandatory_msg_id" in context.user_data:
@@ -221,15 +208,23 @@ async def check_and_handle_mandatory_subs(update: Update, context: CallbackConte
     telegram_types = ["telegram", "group", "invite"]
 
     async def check_sub(sub):
+        already_completed = await is_user_completed_sub(user_id, sub["id"])
+        
         if sub["type"] in telegram_types:
             result = await check_telegram_membership(context.bot, user_id, sub)
-            if result is None:
-                is_ok = await is_user_completed_sub(user_id, sub["id"])
-                return (sub, is_ok)
-            return (sub, result)
+            
+            if result is True:
+                if not already_completed:
+                    await mark_user_completed_sub(user_id, sub["id"])
+                return (sub, True)
+            elif result is False:
+                if already_completed:
+                    await set_user_completed_sub(user_id, sub["id"], False)
+                return (sub, False)
+            else:
+                return (sub, already_completed)
         else:
-            is_ok = await is_user_completed_sub(user_id, sub["id"])
-            return (sub, is_ok)
+            return (sub, already_completed)
 
     results = await asyncio.gather(*[check_sub(sub) for sub in subs])
 
@@ -237,10 +232,6 @@ async def check_and_handle_mandatory_subs(update: Update, context: CallbackConte
     for sub, is_ok in results:
         if not is_ok:
             incomplete.append(sub)
-        else:
-            if sub["type"] in telegram_types:
-                if not await is_user_completed_sub(user_id, sub["id"]):
-                    await mark_user_completed_sub(user_id, sub["id"])
 
     context.user_data[cache_time_key] = current_time
     if incomplete:
@@ -270,7 +261,7 @@ async def confirm_all_subs_callback(update: Update, context: CallbackContext):
             still_incomplete.append(sub)
 
     if not still_incomplete:
-        await query.edit_message_text("✅ Barchasi tayyor! Botdan foydalanishingiz mumkin.")
+        await query.edit_message_text("✅ Barcha kanallarga obuna bo'lgansiz!")
         await start_after_subs(update, context)
         return
 
@@ -287,7 +278,6 @@ async def confirm_all_subs_callback(update: Update, context: CallbackContext):
 
     results = await asyncio.gather(*[check_single_sub(sub) for sub in still_incomplete])
 
-    # Tartib raqamini topish uchun
     sub_positions = {}
     for i, s in enumerate(subs, start=1):
         sub_positions[s["id"]] = i
@@ -296,19 +286,13 @@ async def confirm_all_subs_callback(update: Update, context: CallbackContext):
     for sub, is_ok in results:
         if not is_ok:
             sub_num = sub_positions.get(sub["id"], "?")
-            type_names = {
-                "telegram": "kanal",
-                "group": "guruh",
-                "invite": "guruh",
-            }
-            type_name = type_names.get(sub["type"], "obuna")
-            failed.append(f"❌ {sub_num}-{type_name}")
+            failed.append(f"❌ {sub_num}-kanal")
 
     if failed:
         msg_text = (
-            "Quyidagilarga a'zo bo'lmagansiz:\n\n" +
+            "Quyidagi kanallarga obuna bo'lmagansiz:\n\n" +
             "\n".join(failed) +
-            "\n\nIltimos, avval ularga qo'shiling va qayta tekshiring."
+            "\n\nIltimos, avval ularga obuna bo'ling va qayta tekshiring."
         )
         await query.edit_message_text(msg_text, disable_web_page_preview=True)
         return
@@ -316,7 +300,7 @@ async def confirm_all_subs_callback(update: Update, context: CallbackContext):
     for sub in still_incomplete:
         await mark_user_completed_sub(user_id, sub["id"])
 
-    await query.edit_message_text("✅ Ajoyib! Barcha talablar bajarildi. Botdan foydalanishingiz mumkin!")
+    await query.edit_message_text("✅ Ajoyib! Barcha kanallarga obuna bo'lgansiz. Botdan foydalanishingiz mumkin!")
 
     if "mandatory_msg_id" in context.user_data:
         del context.user_data["mandatory_msg_id"]
@@ -372,10 +356,10 @@ async def admin(update: Update, context: CallbackContext):
         "<b>📛 Majburiy obuna qo'shish:</b>\n"
         "/add_mandatory &lt;tur&gt; &lt;havola&gt; &lt;limit&gt; [chat_id]\n\n"
         "<b>Turlar:</b>\n"
-        "• <code>telegram</code> - Kanal (tekshiriladi)\n"
-        "• <code>group</code> - Guruh (tekshiriladi)\n"
-        "• <code>invite</code> - Zayafka (chat_id bilan tekshiriladi)\n"
-        "• <code>bot</code> - Bot (start bilan)\n"
+        "• <code>telegram</code> - Telegram kanal\n"
+        "• <code>group</code> - Telegram guruh\n"
+        "• <code>invite</code> - Zayafka link\n"
+        "• <code>bot</code> - Telegram bot\n"
         "• <code>youtube</code> - YouTube\n"
         "• <code>instagram</code> - Instagram\n"
         "• <code>website</code> - Vebsayt\n\n"
@@ -667,9 +651,9 @@ async def add_mandatory(update: Update, context: CallbackContext):
 
     await add_mandatory_subscription(sub_type, identifier, limit, chat_id)
 
-    msg = f"✅ Qo'shildi: {sub_type} – {identifier} (limit {limit})"
+    msg = f"✅ Qo'shildi: {sub_type} | {identifier} | limit: {limit}"
     if chat_id:
-        msg += f"\nChat ID: {chat_id}"
+        msg += f" | Chat ID: {chat_id}"
     await update.message.reply_text(msg)
 
 
