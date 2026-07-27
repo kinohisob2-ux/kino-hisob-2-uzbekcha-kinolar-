@@ -1,17 +1,9 @@
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8725081317:AAGYPTaNHaoAYvu0FBUl8lt2SWqqyiPnhKo")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "2010030869"))
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://kino_akk_hisob_2_uzbekcha_kino_user:trt5tO7ldUi7hWWKuJWepkjZFmZz5Lwz@dpg-d9jj5hmrnols738sdpb0-a.ohio-postgres.render.com/kino_akk_hisob_2_uzbekcha_kino")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN topilmadi")
-if not ADMIN_ID:
-    raise ValueError("ADMIN_ID topilmadi")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL topilmadi")
-
-ADMIN_ID = int(ADMIN_ID)
+# Telethon uchun
+API_ID = int(os.getenv("API_ID", "38486800"))
+API_HASH = os.getenv("API_HASH", "c5fc7e4d2190b89e5ce8ea01c0369f09")
