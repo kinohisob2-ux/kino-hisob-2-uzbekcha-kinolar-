@@ -27,20 +27,20 @@ from database import (
 
 load_dotenv()
 
-# -------------------- Holatlar --------------------
+# ======================== Holatlar ========================
 WAITING_FOR_VIDEO, WAITING_FOR_CUSTOM_CODE, WAITING_FOR_DESCRIPTION = range(3)
 WAITING_BROADCAST = 3
 WAITING_REF_NAME = 4
 WAITING_AD_CONTENT = 5
 
-# -------------------- Webhook --------------------
+# ======================== Webhook ========================
 WEBHOOK_PATH = "/webhook"
 RENDER_EXTERNAL_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
 if not RENDER_EXTERNAL_HOSTNAME:
     raise ValueError("RENDER_EXTERNAL_HOSTNAME topilmadi")
 WEBHOOK_URL = f"https://{RENDER_EXTERNAL_HOSTNAME}{WEBHOOK_PATH}"
 
-# -------------------- Reklama yuborish --------------------
+# ======================== Reklama ========================
 async def send_ad(bot, chat_id):
     ad = await get_ad()
     if not ad:
@@ -64,22 +64,36 @@ async def send_ad(bot, chat_id):
             await bot.send_voice(chat_id=chat_id, voice=file_id, caption=caption)
         elif content_type == "animation":
             await bot.send_animation(chat_id=chat_id, animation=file_id, caption=caption)
-        else:
-            return
         await increment_ad_count()
     except Exception as e:
         print(f"Reklama yuborishda xatolik: {e}")
 
-# -------------------- Telegram kanal tekshiruvi --------------------
+
+# ======================== Telegram a'zolik tekshiruvi ========================
 async def check_telegram_membership(bot, user_id, chat_identifier):
+    """Kanal/guruh/bot a'zoligini tekshiradi"""
     try:
-        member = await bot.get_chat_member(chat_id=chat_identifier, user_id=user_id)
+        chat_id = chat_identifier
+        if not chat_id.startswith("@"):
+            if "t.me/" in chat_id:
+                parts = chat_id.split("/")
+                if len(parts) >= 2:
+                    username = parts[-1]
+                    if not username.startswith("+") and "joinchat" not in username:
+                        chat_id = "@" + username
+                    else:
+                        return False
+            else:
+                chat_id = "@" + chat_id.lstrip("@")
+        
+        member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
     except Exception as e:
-        print(f"Telegram membership check error: {e}")
+        print(f"Membership check error for {chat_identifier}: {e}")
         return False
 
-# -------------------- Majburiy obuna interfeysi --------------------
+
+# ======================== Majburiy obuna interfeysi ========================
 async def show_mandatory_subs(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     subs = await get_active_mandatory_subs()
@@ -94,16 +108,52 @@ async def show_mandatory_subs(update: Update, context: CallbackContext):
     if not incomplete:
         return True
 
-    text = "🎬 Botdan foydalanish uchun quyidagi kanallarga a'zo bo'lishingiz kerak:\n\n"
+    type_icons = {
+        "telegram": "📢",
+        "group": "👥",
+        "invite": "🔗",
+        "bot": "🤖",
+        "youtube": "▶️",
+        "instagram": "📷",
+        "website": "🌐"
+    }
+
+    text = "🔔 <b>Botdan foydalanish uchun quyidagilarni bajaring:</b>\n\n"
     url_buttons = []
+
     for idx, sub in enumerate(incomplete, start=1):
-        button_text = f"{idx}-kanal"
-        url = sub["identifier"]
-        if sub["type"] == "telegram" and url.startswith("@"):
-            url = f"https://t.me/{url[1:]}"
+        sub_type = sub["type"]
+        identifier = sub["identifier"]
+        icon = type_icons.get(sub_type, "📌")
+
+        if sub_type == "telegram":
+            button_text = f"{icon} {idx}-kanalga obuna bo'lish"
+            url = f"https://t.me/{identifier.lstrip('@')}" if identifier.startswith("@") else identifier
+        elif sub_type == "group":
+            button_text = f"{icon} {idx}-guruhga qo'shilish"
+            url = f"https://t.me/{identifier.lstrip('@')}" if identifier.startswith("@") else identifier
+        elif sub_type == "invite":
+            button_text = f"{icon} {idx}-guruhga qo'shilish (zayafka)"
+            url = identifier
+        elif sub_type == "bot":
+            button_text = f"{icon} {idx}-botni ishga tushirish"
+            url = f"https://t.me/{identifier.lstrip('@')}" if identifier.startswith("@") else identifier
+        elif sub_type == "youtube":
+            button_text = f"{icon} {idx}-YouTube kanali"
+            url = identifier
+        elif sub_type == "instagram":
+            button_text = f"{icon} {idx}-Instagram sahifasi"
+            url = identifier
+        elif sub_type == "website":
+            button_text = f"{icon} {idx}-Vebsaytga o'tish"
+            url = identifier
+        else:
+            button_text = f"{icon} {idx}-havola"
+            url = identifier
+
         url_buttons.append([InlineKeyboardButton(button_text, url=url)])
 
-    confirm_button = [[InlineKeyboardButton("✅ Obunani tasdiqlash", callback_data="confirm_all_subs")]]
+    confirm_button = [[InlineKeyboardButton("✅ Barchasini bajardim", callback_data="confirm_all_subs")]]
     reply_markup = InlineKeyboardMarkup(url_buttons + confirm_button)
 
     if "mandatory_msg_id" in context.user_data:
@@ -111,15 +161,18 @@ async def show_mandatory_subs(update: Update, context: CallbackContext):
             await context.bot.delete_message(chat_id=user_id, message_id=context.user_data["mandatory_msg_id"])
         except:
             pass
-    sent_msg = await update.message.reply_text(text, reply_markup=reply_markup)
+
+    sent_msg = await update.message.reply_text(
+        text, reply_markup=reply_markup, parse_mode="HTML", disable_web_page_preview=True
+    )
     context.user_data["mandatory_msg_id"] = sent_msg.message_id
     return False
 
-# --- Majburiy obunani real vaqtda tekshirish (PARALLEL + CACHE + VARIANT B) ---
+
+# ======================== Majburiy obuna tekshiruvi ========================
 async def check_and_handle_mandatory_subs(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
 
-    # Keshlash: 30 soniya davomida qayta tekshirmaymiz
     cache_key = "sub_check_cache"
     cache_time_key = "sub_check_time"
     current_time = time.time()
@@ -137,13 +190,11 @@ async def check_and_handle_mandatory_subs(update: Update, context: CallbackConte
         context.user_data[cache_time_key] = current_time
         return False
 
-    # Barcha tekshiruvlarni parallel bajarish
+    telegram_check_types = ["telegram", "group"]
+
     async def check_sub(sub):
-        if sub["type"] == "telegram":
-            identifier = sub["identifier"]
-            if not identifier.startswith("@"):
-                identifier = "@" + identifier
-            is_member = await check_telegram_membership(context.bot, user_id, identifier)
+        if sub["type"] in telegram_check_types:
+            is_member = await check_telegram_membership(context.bot, user_id, sub["identifier"])
             return (sub, is_member)
         else:
             is_completed = await is_user_completed_sub(user_id, sub["id"])
@@ -153,21 +204,17 @@ async def check_and_handle_mandatory_subs(update: Update, context: CallbackConte
 
     incomplete = []
     for sub, is_ok in results:
-        if sub["type"] == "telegram":
+        if sub["type"] in telegram_check_types:
             if not is_ok:
-                # A'zo emas -> completed yozuvini o'chiramiz
                 await set_user_completed_sub(user_id, sub["id"], False)
                 incomplete.append(sub)
             else:
-                # A'zo -> agar yozuv bo'lmasa, birinchi marta hisoblaymiz (Variant B)
                 if not await is_user_completed_sub(user_id, sub["id"]):
-                    # Birinchi marta a'zo bo'lish -> count oshiramiz
                     await mark_user_completed_sub(user_id, sub["id"])
         else:
             if not is_ok:
                 incomplete.append(sub)
 
-    # Keshga saqlaymiz
     context.user_data[cache_time_key] = current_time
     if incomplete:
         context.user_data[cache_key] = True
@@ -177,7 +224,8 @@ async def check_and_handle_mandatory_subs(update: Update, context: CallbackConte
         context.user_data[cache_key] = False
         return False
 
-# -------------------- Callback: barcha obunalarni tasdiqlash --------------------
+
+# ======================== Callback: obunani tasdiqlash ========================
 async def confirm_all_subs_callback(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
@@ -185,8 +233,7 @@ async def confirm_all_subs_callback(update: Update, context: CallbackContext):
 
     subs = await get_active_mandatory_subs()
     if not subs:
-        if query.message.text != "Hech qanday majburiy obuna mavjud emas.":
-            await query.edit_message_text("Hech qanday majburiy obuna mavjud emas.")
+        await query.edit_message_text("✅ Hech qanday majburiy obuna mavjud emas.")
         await start_after_subs(update, context)
         return
 
@@ -196,49 +243,46 @@ async def confirm_all_subs_callback(update: Update, context: CallbackContext):
             still_incomplete.append(sub)
 
     if not still_incomplete:
-        if query.message.text != "Siz barcha obunalarni avval tasdiqlagansiz.":
-            await query.edit_message_text("Siz barcha obunalarni avval tasdiqlagansiz.")
+        await query.edit_message_text("✅ Barchasi tayyor! Botdan foydalanishingiz mumkin.")
         await start_after_subs(update, context)
         return
 
-    # Telegram kanallarini parallel tekshirish
-    async def check_telegram_sub(sub):
-        identifier = sub["identifier"]
-        if not identifier.startswith("@"):
-            identifier = "@" + identifier
-        is_member = await check_telegram_membership(context.bot, user_id, identifier)
-        return (sub, is_member)
+    telegram_check_types = ["telegram", "group"]
 
-    telegram_subs = [sub for sub in still_incomplete if sub["type"] == "telegram"]
-    results = await asyncio.gather(*[check_telegram_sub(sub) for sub in telegram_subs])
+    async def check_single_sub(sub):
+        if sub["type"] in telegram_check_types:
+            is_member = await check_telegram_membership(context.bot, user_id, sub["identifier"])
+            return (sub, is_member)
+        else:
+            return (sub, True)
 
-    failed_telegram = []
-    for sub, is_member in results:
-        if not is_member:
-            failed_telegram.append(sub["identifier"])
+    results = await asyncio.gather(*[check_single_sub(sub) for sub in still_incomplete])
 
-    if failed_telegram:
+    failed = []
+    for sub, is_ok in results:
+        if not is_ok:
+            name = sub["identifier"].replace("@", "").replace("https://", "").replace("t.me/", "")
+            failed.append(f"❌ {name}")
+
+    if failed:
         msg_text = (
-            f"❌ Siz quyidagi Telegram kanal(lar)ga a'zo emassiz:\n" + "\n".join(failed_telegram) +
-            "\n\nIltimos, a'zo bo'ling va qayta urining."
+            "Quyidagilarga a'zo bo'lmagansiz:\n\n" +
+            "\n".join(failed) +
+            "\n\nIltimos, avval ularga qo'shiling va qayta tekshiring."
         )
-        if query.message.text != msg_text:
-            await query.edit_message_text(msg_text)
+        await query.edit_message_text(msg_text, disable_web_page_preview=True)
         return
 
-    deactivated_any = False
     for sub in still_incomplete:
-        deactivated = await mark_user_completed_sub(user_id, sub["id"])
-        if deactivated:
-            deactivated_any = True
+        await mark_user_completed_sub(user_id, sub["id"])
 
-    success_text = "✅ Tabriklaymiz! Siz barcha majburiy obunalarni bajardingiz. Endi botdan to‘liq foydalanishingiz mumkin."
-    if query.message.text != success_text:
-        await query.edit_message_text(success_text)
+    await query.edit_message_text("✅ Ajoyib! Barcha talablar bajarildi. Botdan foydalanishingiz mumkin!")
+
     if "mandatory_msg_id" in context.user_data:
         del context.user_data["mandatory_msg_id"]
 
     await start_after_subs(update, context)
+
 
 async def start_after_subs(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
@@ -246,6 +290,7 @@ async def start_after_subs(update: Update, context: CallbackContext):
         message = update.callback_query.message
     else:
         message = update.message
+
     await message.reply_text(
         "🎬 Kino botiga xush kelibsiz!\n"
         "📣 Kino kanalimiz: @kino_boru\n\n"
@@ -254,7 +299,8 @@ async def start_after_subs(update: Update, context: CallbackContext):
     )
     asyncio.create_task(send_ad(context.bot, user_id))
 
-# -------------------- Start (faqat private) --------------------
+
+# ======================== Start ========================
 async def start(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     referral_code = context.args[0] if context.args else None
@@ -265,13 +311,14 @@ async def start(update: Update, context: CallbackContext):
 
     await start_after_subs(update, context)
 
-# -------------------- Admin panel --------------------
+
+# ======================== Admin panel ========================
 async def admin(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔ Siz admin emassiz!")
         return
     await update.message.reply_text(
-        "<b>🔧 Admin panel</b>\n"
+        "<b>🔧 Admin panel</b>\n\n"
         "/addvideo - yangi video qo'shish\n"
         "/delvideo &lt;kod&gt; - o'chirish\n"
         "/list - barcha videolar\n"
@@ -279,20 +326,35 @@ async def admin(update: Update, context: CallbackContext):
         "/broadcast - obunachilarga xabar\n"
         "/createref - referal havola yaratish\n"
         "/refstats - referallar statistikasi\n"
-        "/setad - start/kino reklama o'rnatish\n"
+        "/setad - reklama o'rnatish\n"
         "/removead - reklamani o'chirish\n"
         "/adstats - reklama statistikasi\n\n"
-        "<b>📛 Majburiy obuna</b>\n"
-        "/add_mandatory &lt;type&gt; &lt;identifier&gt; &lt;limit&gt;\n"
-        "/remove_mandatory &lt;id&gt;\n"
-        "/list_mandatory",
-        parse_mode="HTML"
+        "<b>📛 Majburiy obuna qo'shish:</b>\n"
+        "/add_mandatory &lt;tur&gt; &lt;havola&gt; &lt;limit&gt;\n\n"
+        "<b>Turlar:</b>\n"
+        "• <code>telegram</code> - Telegram kanal\n"
+        "• <code>group</code> - Telegram guruh (publik)\n"
+        "• <code>invite</code> - Zayafka link\n"
+        "• <code>bot</code> - Telegram bot\n"
+        "• <code>youtube</code> - YouTube kanal\n"
+        "• <code>instagram</code> - Instagram sahifa\n"
+        "• <code>website</code> - Vebsayt\n\n"
+        "<b>Misollar:</b>\n"
+        "/add_mandatory telegram @kino_kanal 5000\n"
+        "/add_mandatory group @kino_guruh 2000\n"
+        "/add_mandatory invite https://t.me/+abc123 1000\n"
+        "/add_mandatory bot @kinobot 3000\n"
+        "/add_mandatory youtube https://youtube.com/@kanal 5000\n\n"
+        "/remove_mandatory &lt;id&gt; - o'chirish\n"
+        "/list_mandatory - ro'yxat",
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
 
-# -------------------- Statistika --------------------
+
+# ======================== Statistika ========================
 async def stats(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Siz admin emassiz!")
         return
     total = await get_total_users()
     today = await get_today_users()
@@ -306,17 +368,17 @@ async def stats(update: Update, context: CallbackContext):
         f"🟢 24 soatda faol: {active}"
     )
 
-# -------------------- Broadcast --------------------
+
+# ======================== Broadcast ========================
 async def broadcast_start(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Siz admin emassiz!")
         return ConversationHandler.END
     await update.message.reply_text(
         "📢 Barcha obunachilarga yubormoqchi bo'lgan xabaringizni yuboring.\n"
-        "Matn, rasm, video, link — istalgan kontent.\n"
         "/cancel – bekor qilish"
     )
     return WAITING_BROADCAST
+
 
 async def broadcast_send(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
@@ -324,29 +386,33 @@ async def broadcast_send(update: Update, context: CallbackContext):
     msg = update.message
     user_ids = await get_all_user_ids()
     total = len(user_ids)
-    progress_msg = await msg.reply_text(f"📤 {total} ta foydalanuvchiga jo‘natish boshlandi...")
+    progress_msg = await msg.reply_text(f"📤 {total} ta foydalanuvchiga jo'natish boshlandi...")
     asyncio.create_task(_broadcast_task(msg, progress_msg, user_ids, total))
     return ConversationHandler.END
 
+
 async def _broadcast_task(msg, progress_msg, user_ids, total):
     semaphore = asyncio.Semaphore(25)
+
     async def send_to_user(uid):
         async with semaphore:
             try:
                 await msg.copy(chat_id=uid)
-            except Exception:
+            except:
                 pass
+
     tasks = [asyncio.create_task(send_to_user(uid)) for uid in user_ids]
     await asyncio.gather(*tasks)
     await progress_msg.edit_text(f"✅ Xabar {total} ta foydalanuvchiga yuborildi.")
 
-# -------------------- Video qo'shish --------------------
+
+# ======================== Video qo'shish ========================
 async def addvideo_start(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Ruxsat yo‘q")
         return ConversationHandler.END
     await update.message.reply_text("📹 Videoni yuboring (fayl sifatida)")
     return WAITING_FOR_VIDEO
+
 
 async def addvideo_video(update: Update, context: CallbackContext):
     if not update.message.video:
@@ -354,53 +420,55 @@ async def addvideo_video(update: Update, context: CallbackContext):
         return WAITING_FOR_VIDEO
     file_id = update.message.video.file_id
     context.user_data['file_id'] = file_id
-    await update.message.reply_text("🔢 Ushbu video uchun kod kiriting (faqat raqamlar):")
+    await update.message.reply_text("🔢 Kod kiriting (faqat raqamlar):")
     return WAITING_FOR_CUSTOM_CODE
+
 
 async def addvideo_custom_code(update: Update, context: CallbackContext):
     code = update.message.text.strip()
     if not code.isdigit():
-        await update.message.reply_text("❌ Kod faqat raqamlardan iborat bo‘lishi kerak. Qaytadan kiriting:")
+        await update.message.reply_text("❌ Kod faqat raqamlardan iborat bo'lishi kerak:")
         return WAITING_FOR_CUSTOM_CODE
     existing = await get_video(code)
     if existing:
-        await update.message.reply_text(f"⚠️ {code} kodi allaqachon mavjud. Boshqa kod kiriting:")
+        await update.message.reply_text(f"⚠️ {code} kodi mavjud. Boshqa kod kiriting:")
         return WAITING_FOR_CUSTOM_CODE
     context.user_data['code'] = code
-    await update.message.reply_text("✍️ Tavsif yozing (yoki /skip o‘tkazib yuborish)")
+    await update.message.reply_text("✍️ Tavsif yozing (yoki /skip)")
     return WAITING_FOR_DESCRIPTION
+
 
 async def addvideo_description(update: Update, context: CallbackContext):
     description = update.message.text
     file_id = context.user_data.get('file_id')
     code = context.user_data.get('code')
     if not file_id or not code:
-        await update.message.reply_text("Xatolik, qaytadan /addvideo bosing")
         return ConversationHandler.END
     await add_video(code, file_id, description)
     await update.message.reply_text(f"✅ Video saqlandi!\nKod: {code}\nTavsif: {description}")
     context.user_data.clear()
     return ConversationHandler.END
 
+
 async def addvideo_skip(update: Update, context: CallbackContext):
     file_id = context.user_data.get('file_id')
     code = context.user_data.get('code')
     if not file_id or not code:
-        await update.message.reply_text("Xatolik, qaytadan /addvideo bosing")
         return ConversationHandler.END
     await add_video(code, file_id, "")
     await update.message.reply_text(f"✅ Video saqlandi!\nKod: {code}\nTavsifsiz")
     context.user_data.clear()
     return ConversationHandler.END
 
+
 async def cancel(update: Update, context: CallbackContext):
     await update.message.reply_text("Bekor qilindi.")
     return ConversationHandler.END
 
-# -------------------- Video o'chirish --------------------
+
+# ======================== Video o'chirish ========================
 async def delvideo(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Ruxsat yo‘q")
         return
     if not context.args:
         await update.message.reply_text("📛 Kodni kiriting: /delvideo 123")
@@ -409,39 +477,40 @@ async def delvideo(update: Update, context: CallbackContext):
     video = await get_video(code)
     if video:
         await delete_video(code)
-        await update.message.reply_text(f"✅ {code} o‘chirildi.")
+        await update.message.reply_text(f"✅ {code} o'chirildi.")
     else:
         await update.message.reply_text(f"❌ {code} topilmadi.")
 
+
 async def listvideos(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Ruxsat yo‘q")
         return
     videos = await list_all_videos()
     if not videos:
-        await update.message.reply_text("📭 Hech qanday video yo‘q.")
+        await update.message.reply_text("📭 Hech qanday video yo'q.")
         return
     text = "📋 Barcha videolar:\n"
     for code, desc in videos:
         text += f"🔹 Kod: {code} — {desc or 'Tavsifsiz'}\n"
     await update.message.reply_text(text)
 
-# -------------------- Referal tizimi --------------------
+
+# ======================== Referal ========================
 async def createref_start(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Siz admin emassiz!")
         return ConversationHandler.END
-    await update.message.reply_text("🔗 Referal uchun nom bering (masalan, 'instagram'):")
+    await update.message.reply_text("🔗 Referal uchun nom bering:")
     return WAITING_REF_NAME
+
 
 async def createref_get_name(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         return ConversationHandler.END
     name = update.message.text.strip()
     if not name:
-        await update.message.reply_text("❌ Iltimos, bo‘sh bo‘lmagan nom kiriting.")
+        await update.message.reply_text("❌ Bo'sh bo'lmagan nom kiriting.")
         return WAITING_REF_NAME
-    bot_username = "KINO_bor_botbot"  # O‘z bot username bilan almashtiring
+    bot_username = "KINO_bor_botbot"
     while True:
         code = secrets.token_hex(3)
         if not await check_referral_code(code):
@@ -456,30 +525,27 @@ async def createref_get_name(update: Update, context: CallbackContext):
     )
     return ConversationHandler.END
 
+
 async def refstats(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Ruxsat yo‘q")
         return
     referrals = await get_all_referrals()
     if not referrals:
-        await update.message.reply_text("📭 Hali hech qanday referal havola yo‘q.")
+        await update.message.reply_text("📭 Hali hech qanday referal havola yo'q.")
         return
     text = "📊 Referallar statistikasi\n\n"
     for code, name, count in referrals:
-        text += f"• {name} (kod: {code}) – {count} ta foydalanuvchi\n"
+        text += f"• {name} (kod: {code}) – {count} ta\n"
     await update.message.reply_text(text)
 
-# -------------------- Reklama tizimi --------------------
+
+# ======================== Reklama ========================
 async def setad_start(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Siz admin emassiz!")
         return ConversationHandler.END
-    await update.message.reply_text(
-        "📢 Reklama sifatida yubormoqchi bo'lgan kontentni yuboring.\n"
-        "Matn, rasm, video, hujjat, audio, animatsiya — ixtiyoriy.\n"
-        "/cancel – bekor qilish"
-    )
+    await update.message.reply_text("📢 Reklama kontentini yuboring.\n/cancel – bekor qilish")
     return WAITING_AD_CONTENT
+
 
 async def setad_get_content(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
@@ -512,49 +578,51 @@ async def setad_get_content(update: Update, context: CallbackContext):
         content_type = "animation"
         file_id = msg.animation.file_id
     else:
-        await update.message.reply_text("❌ Ushbu kontent turi qo'llab-quvvatlanmaydi. Boshqa narsa yuboring.")
+        await update.message.reply_text("❌ Qo'llab-quvvatlanmaydi. Boshqa narsa yuboring.")
         return WAITING_AD_CONTENT
 
     await set_ad(content_type, file_id, text, caption)
-    await update.message.reply_text(
-        f"✅ Reklama saqlandi!\n"
-        f"Turi: {content_type}\n"
-        f"Endi har bir /start va kino kodidan keyin avtomatik yuboriladi."
-    )
+    await update.message.reply_text(f"✅ Reklama saqlandi!\nTuri: {content_type}")
     return ConversationHandler.END
+
 
 async def removead(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Ruxsat yo‘q")
         return
     await remove_ad()
-    await update.message.reply_text("🗑️ Reklama o'chirildi. Endi start va kodlardan keyin ko'rsatilmaydi.")
+    await update.message.reply_text("🗑️ Reklama o'chirildi.")
+
 
 async def adstats(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Ruxsat yo‘q")
         return
     ad = await get_ad()
     if ad:
         count = ad["send_count"]
         await update.message.reply_text(f"📊 Reklama {count} marta yuborilgan.")
     else:
-        await update.message.reply_text("📭 Hozirda hech qanday reklama o‘rnatilmagan.")
+        await update.message.reply_text("📭 Reklama o'rnatilmagan.")
 
-# -------------------- Majburiy obuna admin buyruqlari --------------------
+
+# ======================== Majburiy obuna admin ========================
 async def add_mandatory(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         return
     args = context.args
     if len(args) < 3:
-        await update.message.reply_text("Ishlatish: /add_mandatory <type> <identifier> <limit>\nMasalan: /add_mandatory telegram @my_channel 2000")
+        await update.message.reply_text(
+            "Ishlatish: /add_mandatory <type> <identifier> <limit>\n"
+            "Masalan: /add_mandatory telegram @my_channel 5000"
+        )
         return
     sub_type, identifier, limit = args[0], args[1], int(args[2])
-    if sub_type not in ("telegram", "youtube", "instagram"):
-        await update.message.reply_text("❌ type faqat: telegram, youtube, instagram")
+    valid_types = ["telegram", "group", "invite", "bot", "youtube", "instagram", "website"]
+    if sub_type not in valid_types:
+        await update.message.reply_text(f"❌ Tur noto'g'ri. Qabul qilinadi: {', '.join(valid_types)}")
         return
     await add_mandatory_subscription(sub_type, identifier, limit)
-    await update.message.reply_text(f"✅ Qo‘shildi: {sub_type} – {identifier} (limit {limit})")
+    await update.message.reply_text(f"✅ Qo'shildi: {sub_type} – {identifier} (limit {limit})")
+
 
 async def remove_mandatory(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
@@ -564,59 +632,33 @@ async def remove_mandatory(update: Update, context: CallbackContext):
         return
     sub_id = int(context.args[0])
     await remove_mandatory_subscription(sub_id)
-    await update.message.reply_text(f"✅ ID {sub_id} o‘chirildi.")
+    await update.message.reply_text(f"✅ ID {sub_id} o'chirildi.")
 
-# -------------------- Yangilangan list_mandatory (kanal real a'zolari soni bilan) --------------------
+
 async def list_mandatory(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         return
     rows = await list_mandatory_subscriptions()
     if not rows:
-        await update.message.reply_text("Hech qanday majburiy obuna yo‘q.")
+        await update.message.reply_text("Hech qanday majburiy obuna yo'q.")
         return
 
-    # Telegram kanallari uchun haqiqiy a'zolar sonini parallel olish
-    async def get_actual_count(identifier):
-        try:
-            chat_id = identifier
-            if chat_id.startswith("@"):
-                chat_id = chat_id[1:]
-            elif chat_id.startswith("https://t.me/"):
-                chat_id = chat_id.split("/")[-1]
-            chat = await context.bot.get_chat(chat_id)
-            return chat.member_count
-        except Exception as e:
-            print(f"Kanal a'zolarini olishda xatolik: {e}")
-            return None
+    text = "📋 Majburiy obunalar:\n\n"
+    for r in rows:
+        status = "✅ faol" if r["is_active"] else "❌ faol emas"
+        text += (
+            f"ID {r['id']}: {r['type']} | {r['identifier']}\n"
+            f"  Limit: {r['limit_count']} | Bajargan: {r['current_count']} | {status}\n\n"
+        )
 
-    tasks = []
-    for row in rows:
-        if row["type"] == "telegram":
-            tasks.append(get_actual_count(row["identifier"]))
-        else:
-            tasks.append(asyncio.sleep(0, result=None))
+    if len(text) > 4000:
+        for i in range(0, len(text), 4000):
+            await update.message.reply_text(text[i:i+4000])
+    else:
+        await update.message.reply_text(text)
 
-    actual_counts = await asyncio.gather(*tasks)
 
-    text = "📋 Majburiy obunalar (kanaldagi haqiqiy a'zolar soni):\n"
-    for idx, row in enumerate(rows):
-        id_ = row["id"]
-        type_ = row["type"]
-        ident = row["identifier"]
-        limit_ = row["limit_count"]
-        active_ = row["is_active"]
-        status = "✅ faol" if active_ else "❌ faol emas"
-
-        if type_ == "telegram":
-            actual = actual_counts[idx] if actual_counts[idx] is not None else row["current_count"]
-        else:
-            actual = row["current_count"]  # YouTube/Instagram uchun eski count
-
-        text += f"ID {id_}: {type_} {ident} | limit {limit_} | a'zolar: {actual} | {status}\n"
-
-    await update.message.reply_text(text)
-
-# -------------------- Kod yuborish (faqat private) --------------------
+# ======================== Kod yuborish ========================
 async def handle_code(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
 
@@ -627,12 +669,15 @@ async def handle_code(update: Update, context: CallbackContext):
     if not text.isdigit():
         await update.message.reply_text("🤔 Iltimos, faqat raqamlardan iborat kod yuboring.")
         return
+
     video = await get_video(text)
     if video:
         file_id, description = video
         caption = f"🎬 Kodi: {text}\n📖 {description}" if description else f"🎬 Kodi: {text}"
         try:
-            await update.message.reply_video(video=file_id, caption=caption, supports_streaming=True, protect_content=True)
+            await update.message.reply_video(
+                video=file_id, caption=caption, supports_streaming=True, protect_content=True
+            )
         except Exception as e:
             print(f"Video yuborish xatosi: {e}")
             await update.message.reply_text("❌ Video yuborishda xatolik yuz berdi.")
@@ -646,18 +691,23 @@ async def handle_code(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text(f"❌ {text} kodli video topilmadi.")
 
-# -------------------- Webhook --------------------
+
+# ======================== Webhook ========================
 async def webhook_handler(request: Request):
     data = await request.json()
     update = Update.de_json(data, bot_application.bot)
     await bot_application.process_update(update)
     return JSONResponse({"ok": True})
 
+
 async def healthcheck(request: Request):
     return JSONResponse({"status": "ok"})
 
+
 bot_application = None
 
+
+# ======================== Main ========================
 async def main():
     global bot_application
     await init_db()
@@ -674,7 +724,6 @@ async def main():
     bot_application.add_handler(CommandHandler("removead", removead, filters=private_filter))
     bot_application.add_handler(CommandHandler("adstats", adstats, filters=private_filter))
     bot_application.add_handler(CommandHandler("cancel", cancel, filters=private_filter))
-
     bot_application.add_handler(CommandHandler("add_mandatory", add_mandatory, filters=private_filter))
     bot_application.add_handler(CommandHandler("remove_mandatory", remove_mandatory, filters=private_filter))
     bot_application.add_handler(CommandHandler("list_mandatory", list_mandatory, filters=private_filter))
@@ -684,7 +733,9 @@ async def main():
         entry_points=[CommandHandler("addvideo", addvideo_start, filters=private_filter)],
         states={
             WAITING_FOR_VIDEO: [MessageHandler(filters.VIDEO & private_filter, addvideo_video)],
-            WAITING_FOR_CUSTOM_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, addvideo_custom_code)],
+            WAITING_FOR_CUSTOM_CODE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, addvideo_custom_code)
+            ],
             WAITING_FOR_DESCRIPTION: [
                 CommandHandler("skip", addvideo_skip, filters=private_filter),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, addvideo_description)
@@ -697,7 +748,9 @@ async def main():
     broadcast_conv = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_start, filters=private_filter)],
         states={
-            WAITING_BROADCAST: [MessageHandler(filters.ALL & ~filters.COMMAND & private_filter, broadcast_send)]
+            WAITING_BROADCAST: [
+                MessageHandler(filters.ALL & ~filters.COMMAND & private_filter, broadcast_send)
+            ]
         },
         fallbacks=[CommandHandler("cancel", cancel, filters=private_filter)]
     )
@@ -706,7 +759,9 @@ async def main():
     ref_conv = ConversationHandler(
         entry_points=[CommandHandler("createref", createref_start, filters=private_filter)],
         states={
-            WAITING_REF_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, createref_get_name)]
+            WAITING_REF_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, createref_get_name)
+            ]
         },
         fallbacks=[CommandHandler("cancel", cancel, filters=private_filter)]
     )
@@ -715,13 +770,17 @@ async def main():
     ad_conv = ConversationHandler(
         entry_points=[CommandHandler("setad", setad_start, filters=private_filter)],
         states={
-            WAITING_AD_CONTENT: [MessageHandler(filters.ALL & ~filters.COMMAND & private_filter, setad_get_content)]
+            WAITING_AD_CONTENT: [
+                MessageHandler(filters.ALL & ~filters.COMMAND & private_filter, setad_get_content)
+            ]
         },
         fallbacks=[CommandHandler("cancel", cancel, filters=private_filter)]
     )
     bot_application.add_handler(ad_conv)
 
-    bot_application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, handle_code))
+    bot_application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND & private_filter, handle_code)
+    )
 
     await bot_application.initialize()
     await bot_application.bot.set_webhook(WEBHOOK_URL)
@@ -737,6 +796,7 @@ async def main():
     config = uvicorn.Config(starlette_app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
