@@ -1,5 +1,6 @@
 import asyncpg
 from config import DATABASE_URL
+from datetime import datetime
 
 pool = None
 
@@ -8,6 +9,7 @@ async def init_db():
     pool = await asyncpg.create_pool(DATABASE_URL)
 
     async with pool.acquire() as conn:
+        # ----- Foydalanuvchilar -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -17,6 +19,7 @@ async def init_db():
             )
         ''')
 
+        # ----- Videolar -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS videos (
                 code TEXT PRIMARY KEY,
@@ -25,6 +28,7 @@ async def init_db():
             )
         ''')
 
+        # ----- Referallar -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS referrals (
                 code TEXT PRIMARY KEY,
@@ -33,6 +37,7 @@ async def init_db():
             )
         ''')
 
+        # ----- Reklama -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS ads (
                 id INTEGER PRIMARY KEY DEFAULT 1,
@@ -49,6 +54,7 @@ async def init_db():
             ON CONFLICT (id) DO NOTHING
         ''')
 
+        # ----- Majburiy obuna -----
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS mandatory_subscriptions (
                 id SERIAL PRIMARY KEY,
@@ -57,10 +63,18 @@ async def init_db():
                 limit_count INTEGER NOT NULL,
                 current_count INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
-                chat_id BIGINT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        # chat_id QO'SHISH
+        try:
+            await conn.execute('''
+                ALTER TABLE mandatory_subscriptions 
+                ADD COLUMN IF NOT EXISTS chat_id BIGINT
+            ''')
+        except:
+            pass
 
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS user_completed_subs (
@@ -92,6 +106,32 @@ async def register_user_start(user_id, referral_code=None):
                     "UPDATE users SET last_activity = CURRENT_TIMESTAMP WHERE user_id = $1",
                     user_id
                 )
+
+
+async def get_user_referral_count(user_id):
+    """Foydalanuvchi qancha odam qo'shganini qaytaradi"""
+    async with pool.acquire() as conn:
+        # users jadvalidan referred_by = user_id bo'lganlarni sanash
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM users WHERE referred_by = $1::text",
+            str(user_id)
+        )
+        # referrals jadvalidan ham (eski tizim)
+        ref_count = await conn.fetchval(
+            "SELECT COALESCE(SUM(count), 0) FROM referrals WHERE code = $1::text",
+            str(user_id)
+        )
+        return count + ref_count
+
+
+async def get_user_referral_details(user_id):
+    """Foydalanuvchi qo'shgan odamlar ro'yxatini qaytaradi"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id, first_start FROM users WHERE referred_by = $1::text ORDER BY first_start DESC",
+            str(user_id)
+        )
+        return [(r["user_id"], r["first_start"]) for r in rows]
 
 
 async def get_total_users():
@@ -255,14 +295,13 @@ async def mark_user_completed_sub(user_id: int, sub_id: int) -> bool:
                 "SELECT current_count, limit_count FROM mandatory_subscriptions WHERE id = $1",
                 sub_id
             )
-            deactivated = False
             if row and row["current_count"] >= row["limit_count"]:
                 await conn.execute(
                     "UPDATE mandatory_subscriptions SET is_active = 0 WHERE id = $1",
                     sub_id
                 )
-                deactivated = True
-            return deactivated
+                return True
+            return False
 
 
 async def set_user_completed_sub(user_id: int, sub_id: int, completed: bool = True):
