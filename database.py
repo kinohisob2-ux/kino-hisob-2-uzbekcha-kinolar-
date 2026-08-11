@@ -1,6 +1,5 @@
 import asyncpg
 from config import DATABASE_URL
-from datetime import datetime
 
 pool = None
 
@@ -111,27 +110,15 @@ async def register_user_start(user_id, referral_code=None):
 async def get_user_referral_count(user_id):
     """Foydalanuvchi qancha odam qo'shganini qaytaradi"""
     async with pool.acquire() as conn:
-        # users jadvalidan referred_by = user_id bo'lganlarni sanash
         count = await conn.fetchval(
             "SELECT COUNT(*) FROM users WHERE referred_by = $1::text",
             str(user_id)
         )
-        # referrals jadvalidan ham (eski tizim)
         ref_count = await conn.fetchval(
             "SELECT COALESCE(SUM(count), 0) FROM referrals WHERE code = $1::text",
             str(user_id)
         )
         return count + ref_count
-
-
-async def get_user_referral_details(user_id):
-    """Foydalanuvchi qo'shgan odamlar ro'yxatini qaytaradi"""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT user_id, first_start FROM users WHERE referred_by = $1::text ORDER BY first_start DESC",
-            str(user_id)
-        )
-        return [(r["user_id"], r["first_start"]) for r in rows]
 
 
 async def get_total_users():
