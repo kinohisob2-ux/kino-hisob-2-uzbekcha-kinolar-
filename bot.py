@@ -22,7 +22,7 @@ from database import (
     set_ad, get_ad, remove_ad, increment_ad_count,
     get_active_mandatory_subs, is_user_completed_sub, mark_user_completed_sub,
     add_mandatory_subscription, remove_mandatory_subscription, list_mandatory_subscriptions,
-    set_user_completed_sub, get_user_referral_count, get_user_referral_details
+    set_user_completed_sub, get_user_referral_count
 )
 
 load_dotenv()
@@ -324,11 +324,6 @@ async def start(update: Update, context: CallbackContext):
     referral_code = context.args[0] if context.args else None
     await register_user_start(user_id, referral_code)
 
-    if referral_code:
-        # Referal orqali kelgan foydalanuvchini kim qo'shganini ko'rsatish
-        # (admin uchun log, oddiy foydalanuvchiga kerak emas)
-        pass
-
     if await check_and_handle_mandatory_subs(update, context):
         return
 
@@ -345,20 +340,15 @@ async def referral(update: Update, context: CallbackContext):
     
     # Foydalanuvchi qancha odam qo'shgan
     count = await get_user_referral_count(user_id)
-    details = await get_user_referral_details(user_id)
     
     refer_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
     
     text = (
         f"🔗 <b>Sizning referal havolangiz:</b>\n"
         f"<code>{refer_link}</code>\n\n"
-        f"👥 <b>Umumiy qo'shgan odamlaringiz:</b> {count}\n\n"
+        f"👥 <b>Umumiy qo'shgan odamlaringiz:</b> {count} ta\n\n"
+        f"<i>Havolani do'stlaringizga yuboring va botga qo'shilingan har bir do'stingiz hisoblanadi!</i>"
     )
-    
-    if details:
-        text += "<b>📋 Qo'shilganlar ro'yxati:</b>\n"
-        for i, (uid, date) in enumerate(details, 1):
-            text += f"{i}. <code>{uid}</code> - {date.strftime('%d.%m.%Y %H:%M')}\n"
     
     await update.message.reply_text(
         text,
@@ -423,22 +413,14 @@ async def userref(update: Update, context: CallbackContext):
         return
     
     count = await get_user_referral_count(target_user_id)
-    details = await get_user_referral_details(target_user_id)
     
     refer_link = f"https://t.me/{BOT_USERNAME}?start={target_user_id}"
     
     text = (
         f"🔗 <b>Foydalanuvchi {target_user_id} referal havolasi:</b>\n"
         f"<code>{refer_link}</code>\n\n"
-        f"👥 <b>Umumiy qo'shgan odamlari:</b> {count}\n\n"
+        f"👥 <b>Umumiy qo'shgan odamlari:</b> {count} ta"
     )
-    
-    if details:
-        text += "<b>📋 Qo'shilganlar ro'yxati:</b>\n"
-        for i, (uid, date) in enumerate(details, 1):
-            text += f"{i}. <code>{uid}</code> - {date.strftime('%d.%m.%Y %H:%M')}\n"
-    else:
-        text += "📭 Hali hech kim qo'shilmagan."
     
     await update.message.reply_text(
         text,
