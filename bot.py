@@ -11,7 +11,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters,
     ConversationHandler, CallbackContext, CallbackQueryHandler
 )
-from telegram.error import Forbidden, Unauthorized, BadRequest, TimedOut
+from telegram.error import Forbidden, BadRequest, TimedOut, NetworkError, ChatMigrated, RetryAfter
 from dotenv import load_dotenv
 
 from config import BOT_TOKEN, ADMIN_ID
@@ -54,14 +54,14 @@ async def safe_send_message(bot, chat_id, **kwargs):
     except Forbidden:
         print(f"⚠️ Foydalanuvchi {chat_id} botni bloklagan")
         return None
-    except Unauthorized:
-        print("❌ Bot tokeni noto'g'ri")
-        return None
     except BadRequest as e:
         print(f"❌ Noto'g'ri so'rov: {e}")
         return None
     except TimedOut:
         print(f"⏱️ Timeout: {chat_id}")
+        return None
+    except NetworkError as e:
+        print(f"🌐 Tarmoq xatosi: {e}")
         return None
     except Exception as e:
         print(f"❌ Xabar yuborishda xatolik: {e}")
