@@ -8,9 +8,10 @@ async def init_db():
     pool = await asyncpg.create_pool(DATABASE_URL)
 
     async with pool.acquire() as conn:
-        # ----- Foydalanuvchilar -----
+        # ----- USERS jadvalini majburan qayta yaratish (0 dan) -----
+        await conn.execute("DROP TABLE IF EXISTS users CASCADE")
         await conn.execute('''
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE users (
                 user_id BIGINT PRIMARY KEY,
                 first_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -62,18 +63,10 @@ async def init_db():
                 limit_count INTEGER NOT NULL,
                 current_count INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                chat_id BIGINT
             )
         ''')
-
-        # chat_id QO'SHISH
-        try:
-            await conn.execute('''
-                ALTER TABLE mandatory_subscriptions 
-                ADD COLUMN IF NOT EXISTS chat_id BIGINT
-            ''')
-        except:
-            pass
 
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS user_completed_subs (
@@ -83,92 +76,14 @@ async def init_db():
                 PRIMARY KEY (user_id, sub_id)
             )
         ''')
+        
+        print("✅ Barcha jadvallar muvaffaqiyatli yaratildi!")
 
 
 # ======================== RESET FUNKSIYALARI ========================
 
-async def reset_all_tables():
-    """Barcha jadvallarni o'chirib, 0 dan boshlaydi"""
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Barcha jadvallarni o'chirish
-            await conn.execute("DROP TABLE IF EXISTS users CASCADE")
-            await conn.execute("DROP TABLE IF EXISTS videos CASCADE")
-            await conn.execute("DROP TABLE IF EXISTS referrals CASCADE")
-            await conn.execute("DROP TABLE IF EXISTS ads CASCADE")
-            await conn.execute("DROP TABLE IF EXISTS mandatory_subscriptions CASCADE")
-            await conn.execute("DROP TABLE IF EXISTS user_completed_subs CASCADE")
-            
-            # Jadvallarni qayta yaratish
-            await conn.execute('''
-                CREATE TABLE users (
-                    user_id BIGINT PRIMARY KEY,
-                    first_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    referred_by TEXT
-                )
-            ''')
-            
-            await conn.execute('''
-                CREATE TABLE videos (
-                    code TEXT PRIMARY KEY,
-                    file_id TEXT NOT NULL,
-                    description TEXT
-                )
-            ''')
-            
-            await conn.execute('''
-                CREATE TABLE referrals (
-                    code TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    count INTEGER DEFAULT 0
-                )
-            ''')
-            
-            await conn.execute('''
-                CREATE TABLE ads (
-                    id INTEGER PRIMARY KEY DEFAULT 1,
-                    content_type TEXT NOT NULL,
-                    file_id TEXT,
-                    text TEXT,
-                    caption TEXT,
-                    send_count INTEGER DEFAULT 0
-                )
-            ''')
-            
-            await conn.execute('''
-                INSERT INTO ads (id, content_type, file_id, text, caption, send_count)
-                VALUES (1, 'empty', NULL, NULL, NULL, 0)
-                ON CONFLICT (id) DO NOTHING
-            ''')
-            
-            await conn.execute('''
-                CREATE TABLE mandatory_subscriptions (
-                    id SERIAL PRIMARY KEY,
-                    type TEXT NOT NULL,
-                    identifier TEXT NOT NULL,
-                    limit_count INTEGER NOT NULL,
-                    current_count INTEGER DEFAULT 0,
-                    is_active INTEGER DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    chat_id BIGINT
-                )
-            ''')
-            
-            await conn.execute('''
-                CREATE TABLE user_completed_subs (
-                    user_id BIGINT NOT NULL,
-                    sub_id INTEGER NOT NULL,
-                    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (user_id, sub_id)
-                )
-            ''')
-            
-            print("✅ Barcha jadvallar 0 dan tiklandi!")
-
-
 async def reset_users_table():
-    """Faqat users jadvalini tozalaydi"""
+    """Faqat users jadvalini 0 dan qurish"""
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("DROP TABLE IF EXISTS users CASCADE")
