@@ -11,6 +11,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters,
     ConversationHandler, CallbackContext, CallbackQueryHandler
 )
+from telegram.error import Forbidden, Unauthorized, BadRequest, TimedOut
 from dotenv import load_dotenv
 
 from config import BOT_TOKEN, ADMIN_ID
@@ -45,6 +46,93 @@ BOT_USERNAME = "uzbekchakinobubot"
 CHANNEL_USERNAME = "@kino_bori"
 CHANNEL_URL = "https://t.me/kino_bori"
 
+# ======================== Xatoliklarni tutish ========================
+async def safe_send_message(bot, chat_id, **kwargs):
+    """Xavfsiz xabar yuborish funksiyasi"""
+    try:
+        return await bot.send_message(chat_id=chat_id, **kwargs)
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {chat_id} botni bloklagan")
+        return None
+    except Unauthorized:
+        print("❌ Bot tokeni noto'g'ri")
+        return None
+    except BadRequest as e:
+        print(f"❌ Noto'g'ri so'rov: {e}")
+        return None
+    except TimedOut:
+        print(f"⏱️ Timeout: {chat_id}")
+        return None
+    except Exception as e:
+        print(f"❌ Xabar yuborishda xatolik: {e}")
+        return None
+
+async def safe_send_video(bot, chat_id, **kwargs):
+    """Xavfsiz video yuborish funksiyasi"""
+    try:
+        return await bot.send_video(chat_id=chat_id, **kwargs)
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {chat_id} botni bloklagan")
+        return None
+    except Exception as e:
+        print(f"❌ Video yuborishda xatolik: {e}")
+        return None
+
+async def safe_send_photo(bot, chat_id, **kwargs):
+    """Xavfsiz rasm yuborish funksiyasi"""
+    try:
+        return await bot.send_photo(chat_id=chat_id, **kwargs)
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {chat_id} botni bloklagan")
+        return None
+    except Exception as e:
+        print(f"❌ Rasm yuborishda xatolik: {e}")
+        return None
+
+async def safe_send_document(bot, chat_id, **kwargs):
+    """Xavfsiz hujjat yuborish funksiyasi"""
+    try:
+        return await bot.send_document(chat_id=chat_id, **kwargs)
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {chat_id} botni bloklagan")
+        return None
+    except Exception as e:
+        print(f"❌ Hujjat yuborishda xatolik: {e}")
+        return None
+
+async def safe_send_audio(bot, chat_id, **kwargs):
+    """Xavfsiz audio yuborish funksiyasi"""
+    try:
+        return await bot.send_audio(chat_id=chat_id, **kwargs)
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {chat_id} botni bloklagan")
+        return None
+    except Exception as e:
+        print(f"❌ Audio yuborishda xatolik: {e}")
+        return None
+
+async def safe_send_voice(bot, chat_id, **kwargs):
+    """Xavfsiz ovoz yuborish funksiyasi"""
+    try:
+        return await bot.send_voice(chat_id=chat_id, **kwargs)
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {chat_id} botni bloklagan")
+        return None
+    except Exception as e:
+        print(f"❌ Ovoz yuborishda xatolik: {e}")
+        return None
+
+async def safe_send_animation(bot, chat_id, **kwargs):
+    """Xavfsiz animatsiya yuborish funksiyasi"""
+    try:
+        return await bot.send_animation(chat_id=chat_id, **kwargs)
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {chat_id} botni bloklagan")
+        return None
+    except Exception as e:
+        print(f"❌ Animatsiya yuborishda xatolik: {e}")
+        return None
+
 # ======================== Reklama ========================
 async def send_ad(bot, chat_id):
     ad = await get_ad()
@@ -56,19 +144,19 @@ async def send_ad(bot, chat_id):
     caption = ad["caption"] or ""
     try:
         if content_type == "text":
-            await bot.send_message(chat_id=chat_id, text=text)
+            await safe_send_message(bot, chat_id=chat_id, text=text)
         elif content_type == "photo":
-            await bot.send_photo(chat_id=chat_id, photo=file_id, caption=caption)
+            await safe_send_photo(bot, chat_id=chat_id, photo=file_id, caption=caption)
         elif content_type == "video":
-            await bot.send_video(chat_id=chat_id, video=file_id, caption=caption)
+            await safe_send_video(bot, chat_id=chat_id, video=file_id, caption=caption)
         elif content_type == "document":
-            await bot.send_document(chat_id=chat_id, document=file_id, caption=caption)
+            await safe_send_document(bot, chat_id=chat_id, document=file_id, caption=caption)
         elif content_type == "audio":
-            await bot.send_audio(chat_id=chat_id, audio=file_id, caption=caption)
+            await safe_send_audio(bot, chat_id=chat_id, audio=file_id, caption=caption)
         elif content_type == "voice":
-            await bot.send_voice(chat_id=chat_id, voice=file_id, caption=caption)
+            await safe_send_voice(bot, chat_id=chat_id, voice=file_id, caption=caption)
         elif content_type == "animation":
-            await bot.send_animation(chat_id=chat_id, animation=file_id, caption=caption)
+            await safe_send_animation(bot, chat_id=chat_id, animation=file_id, caption=caption)
         await increment_ad_count()
     except Exception as e:
         print(f"Reklama yuborishda xatolik: {e}")
@@ -108,6 +196,9 @@ async def check_telegram_membership(bot, user_id, sub_data):
         member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
         
+    except Forbidden:
+        print(f"Bot {chat_id} kanalida admin emas")
+        return False
     except Exception as e:
         print(f"Membership check error: {e}")
         return False
@@ -170,10 +261,15 @@ async def show_mandatory_subs(update: Update, context: CallbackContext):
         except:
             pass
 
-    sent_msg = await update.message.reply_text(
-        text, reply_markup=reply_markup, parse_mode="HTML", disable_web_page_preview=True
-    )
-    context.user_data["mandatory_msg_id"] = sent_msg.message_id
+    try:
+        sent_msg = await update.message.reply_text(
+            text, reply_markup=reply_markup, parse_mode="HTML", disable_web_page_preview=True
+        )
+        context.user_data["mandatory_msg_id"] = sent_msg.message_id
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {user_id} botni bloklagan")
+    except Exception as e:
+        print(f"Majburiy obuna xabarini yuborishda xatolik: {e}")
     return False
 
 
@@ -308,13 +404,17 @@ async def start_after_subs(update: Update, context: CallbackContext):
     else:
         message = update.message
 
-    await message.reply_text(
-        f"🎬 Kino botiga xush kelibsiz!\n"
-        f"📣 Kino kanalimiz: {CHANNEL_USERNAME}\n\n"
-        f"Film kodini raqamlarda yuboring.\n"
-        f"Admin: /admin\n\n"
-        f"🔗 /referral - referal havolangiz va statistikangiz"
-    )
+    try:
+        await message.reply_text(
+            f"🎬 Kino botiga xush kelibsiz!\n"
+            f"📣 Kino kanalimiz: {CHANNEL_USERNAME}\n\n"
+            f"Film kodini raqamlarda yuboring.\n"
+            f"Admin: /admin\n\n"
+            f"🔗 /referral - referal havolangiz va statistikangiz"
+        )
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {user_id} botni bloklagan")
+        return
     asyncio.create_task(send_ad(context.bot, user_id))
 
 
@@ -350,11 +450,14 @@ async def referral(update: Update, context: CallbackContext):
         f"<i>Havolani do'stlaringizga yuboring va botga qo'shilingan har bir do'stingiz hisoblanadi!</i>"
     )
     
-    await update.message.reply_text(
-        text,
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+    try:
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Forbidden:
+        print(f"⚠️ Foydalanuvchi {user_id} botni bloklagan")
 
 
 # ======================== Admin panel ========================
@@ -470,15 +573,33 @@ async def broadcast_send(update: Update, context: CallbackContext):
 
 async def _broadcast_task(msg, progress_msg, user_ids, total):
     semaphore = asyncio.Semaphore(25)
+    success_count = 0
+    fail_count = 0
+    
     async def send_to_user(uid):
+        nonlocal success_count, fail_count
         async with semaphore:
             try:
                 await msg.copy(chat_id=uid)
-            except:
-                pass
+                success_count += 1
+            except Forbidden:
+                fail_count += 1
+                print(f"⚠️ Foydalanuvchi {uid} botni bloklagan")
+            except Exception as e:
+                fail_count += 1
+                print(f"❌ {uid} ga yuborishda xatolik: {e}")
+    
     tasks = [asyncio.create_task(send_to_user(uid)) for uid in user_ids]
     await asyncio.gather(*tasks)
-    await progress_msg.edit_text(f"✅ Xabar {total} ta foydalanuvchiga yuborildi.")
+    
+    try:
+        await progress_msg.edit_text(
+            f"✅ Xabar yuborildi!\n"
+            f"📤 Yuborildi: {success_count} ta\n"
+            f"❌ Yuborilmadi: {fail_count} ta"
+        )
+    except:
+        pass
 
 
 # ======================== Video qo'shish ========================
@@ -768,6 +889,9 @@ async def handle_code(update: Update, context: CallbackContext):
             await update.message.reply_video(
                 video=file_id, caption=caption, supports_streaming=True, protect_content=True
             )
+        except Forbidden:
+            print(f"⚠️ Foydalanuvchi {user_id} botni bloklagan")
+            return
         except Exception as e:
             print(f"Video yuborish xatosi: {e}")
             await update.message.reply_text("❌ Video yuborishda xatolik yuz berdi.")
@@ -776,18 +900,26 @@ async def handle_code(update: Update, context: CallbackContext):
             f"📱 Instagram: https://instagram.com/Bear_uzb070\n"
             f"📣 Kino kanal: {CHANNEL_USERNAME}"
         )
-        await update.message.reply_text(links_msg)
-        await send_ad(context.bot, user_id)
+        try:
+            await update.message.reply_text(links_msg)
+        except Forbidden:
+            print(f"⚠️ Foydalanuvchi {user_id} botni bloklagan")
+            return
+        asyncio.create_task(send_ad(context.bot, user_id))
     else:
         await update.message.reply_text(f"❌ {text} kodli video topilmadi.")
 
 
 # ======================== Webhook ========================
 async def webhook_handler(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, bot_application.bot)
-    await bot_application.process_update(update)
-    return JSONResponse({"ok": True})
+    try:
+        data = await request.json()
+        update = Update.de_json(data, bot_application.bot)
+        await bot_application.process_update(update)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        print(f"Webhook xatosi: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 async def healthcheck(request: Request):
@@ -875,7 +1007,13 @@ async def main():
     )
 
     await bot_application.initialize()
-    await bot_application.bot.set_webhook(WEBHOOK_URL)
+    
+    # Webhook o'rnatish
+    try:
+        await bot_application.bot.set_webhook(WEBHOOK_URL)
+        print(f"✅ Webhook o'rnatildi: {WEBHOOK_URL}")
+    except Exception as e:
+        print(f"❌ Webhook o'rnatishda xatolik: {e}")
 
     starlette_app = Starlette(debug=False, routes=[
         Route(WEBHOOK_PATH, webhook_handler, methods=["POST"]),
