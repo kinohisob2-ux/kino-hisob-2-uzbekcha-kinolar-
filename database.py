@@ -8,7 +8,8 @@ load_dotenv()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 async def get_db():
-    return asyncpg.connect(DATABASE_URL)
+    """Ma'lumotlar bazasiga ulanish"""
+    return await asyncpg.connect(DATABASE_URL)
 
 async def init_db():
     conn = await get_db()
@@ -134,18 +135,19 @@ async def register_user_start(user_id, referral_code=None):
                     )
                 else:
                     # Foydalanuvchi ID orqali referal
-                    referrer_exists = await conn.fetchval(
-                        "SELECT 1 FROM users WHERE user_id = $1", 
-                        int(referral_code) if referral_code.isdigit() else 0
-                    )
-                    if referrer_exists:
-                        await conn.execute(
-                            """
-                            INSERT INTO user_referrals (user_id, referral_code)
-                            VALUES ($1, $2)
-                            """,
-                            int(referral_code), str(user_id)
+                    if referral_code.isdigit():
+                        referrer_exists = await conn.fetchval(
+                            "SELECT 1 FROM users WHERE user_id = $1", 
+                            int(referral_code)
                         )
+                        if referrer_exists:
+                            await conn.execute(
+                                """
+                                INSERT INTO user_referrals (user_id, referral_code)
+                                VALUES ($1, $2)
+                                """,
+                                int(referral_code), str(user_id)
+                            )
         else:
             # Mavjud foydalanuvchini yangilash
             await conn.execute(
