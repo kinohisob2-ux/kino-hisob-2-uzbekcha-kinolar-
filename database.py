@@ -85,7 +85,113 @@ async def init_db():
         ''')
 
 
+# ======================== RESET FUNKSIYALARI ========================
+
+async def reset_all_tables():
+    """Barcha jadvallarni o'chirib, 0 dan boshlaydi"""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Barcha jadvallarni o'chirish
+            await conn.execute("DROP TABLE IF EXISTS users CASCADE")
+            await conn.execute("DROP TABLE IF EXISTS videos CASCADE")
+            await conn.execute("DROP TABLE IF EXISTS referrals CASCADE")
+            await conn.execute("DROP TABLE IF EXISTS ads CASCADE")
+            await conn.execute("DROP TABLE IF EXISTS mandatory_subscriptions CASCADE")
+            await conn.execute("DROP TABLE IF EXISTS user_completed_subs CASCADE")
+            
+            # Jadvallarni qayta yaratish
+            await conn.execute('''
+                CREATE TABLE users (
+                    user_id BIGINT PRIMARY KEY,
+                    first_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    referred_by TEXT
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE videos (
+                    code TEXT PRIMARY KEY,
+                    file_id TEXT NOT NULL,
+                    description TEXT
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE referrals (
+                    code TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    count INTEGER DEFAULT 0
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE ads (
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    content_type TEXT NOT NULL,
+                    file_id TEXT,
+                    text TEXT,
+                    caption TEXT,
+                    send_count INTEGER DEFAULT 0
+                )
+            ''')
+            
+            await conn.execute('''
+                INSERT INTO ads (id, content_type, file_id, text, caption, send_count)
+                VALUES (1, 'empty', NULL, NULL, NULL, 0)
+                ON CONFLICT (id) DO NOTHING
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE mandatory_subscriptions (
+                    id SERIAL PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    identifier TEXT NOT NULL,
+                    limit_count INTEGER NOT NULL,
+                    current_count INTEGER DEFAULT 0,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    chat_id BIGINT
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE user_completed_subs (
+                    user_id BIGINT NOT NULL,
+                    sub_id INTEGER NOT NULL,
+                    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, sub_id)
+                )
+            ''')
+            
+            print("✅ Barcha jadvallar 0 dan tiklandi!")
+
+
+async def reset_users_table():
+    """Faqat users jadvalini tozalaydi"""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DROP TABLE IF EXISTS users CASCADE")
+            await conn.execute('''
+                CREATE TABLE users (
+                    user_id BIGINT PRIMARY KEY,
+                    first_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    referred_by TEXT
+                )
+            ''')
+            print("✅ Users jadvali 0 dan tiklandi!")
+
+
+async def clear_all_users():
+    """Faqat users jadvalidagi ma'lumotlarni o'chiradi (jadval saqlanadi)"""
+    async with pool.acquire() as conn:
+        await conn.execute("TRUNCATE TABLE users RESTART IDENTITY CASCADE")
+        print("✅ Barcha foydalanuvchilar o'chirildi!")
+
+
 # ======================== Foydalanuvchilar ========================
+
 async def register_user_start(user_id, referral_code=None):
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -152,6 +258,7 @@ async def get_all_user_ids():
 
 
 # ======================== Videolar ========================
+
 async def add_video(code: str, file_id: str, description: str = ""):
     async with pool.acquire() as conn:
         await conn.execute(
@@ -179,6 +286,7 @@ async def list_all_videos():
 
 
 # ======================== Referallar ========================
+
 async def create_referral(name, code):
     async with pool.acquire() as conn:
         await conn.execute("INSERT INTO referrals (code, name) VALUES ($1, $2)", code, name)
@@ -197,6 +305,7 @@ async def get_all_referrals():
 
 
 # ======================== Reklama ========================
+
 async def set_ad(content_type, file_id=None, text=None, caption=None):
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM ads WHERE id = 1")
@@ -231,6 +340,7 @@ async def increment_ad_count():
 
 
 # ======================== Majburiy obuna ========================
+
 async def get_active_mandatory_subs():
     async with pool.acquire() as conn:
         rows = await conn.fetch(
